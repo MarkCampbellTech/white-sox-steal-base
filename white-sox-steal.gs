@@ -43,8 +43,10 @@ var CONFIG = {
   scheduleLookaheadDays: 60,
   headshotUrlTemplate:
     "https://img.mlbstatic.com/mlb-photos/image/upload/w_120,q_auto:best/v1/people/{playerId}/headshot/silo/current",
-  teamLogoUrlTemplate:
+  teamLogoUrlOnLight:
     "https://www.mlbstatic.com/team-logos/team-cap-on-light/{teamId}.svg",
+  teamLogoUrlOnDark:
+    "https://www.mlbstatic.com/team-logos/team-cap-on-dark/{teamId}.svg",
 };
 
 // --- Logging ---------------------------------------------------------------
@@ -327,8 +329,8 @@ function sendStealEmailHtml_(payload) {
   var steal = payload.steal;
   var to = getNotifyEmail_();
   var opponent = steal.opponent || "opponent";
-  var subject =
-    "Stolen base!! — " + steal.playerName + " stole against " + opponent;
+  var callout = formatStealCallout_(steal);
+  var subject = "Stolen base!! — " + callout + " vs " + opponent;
 
   var html = buildStealEmailHtml_(payload);
   var plain = buildStealEmailPlain_(payload);
@@ -385,24 +387,34 @@ function buildStealEmailHtml_(payload) {
   var gamedayUrl = "https://www.mlb.com/gameday/" + steal.gamePk;
   var parts = [];
 
-  parts.push("<div style=\"font-family:Arial,sans-serif;max-width:600px;color:#111;\">");
+  parts.push(buildEmailDarkModeGuardHtml_());
+  parts.push(
+    "<div class=\"sox-email-root\" style=\"font-family:Arial,sans-serif;max-width:600px;color:#111;color-scheme:light only;\">"
+  );
 
   parts.push("<div style=\"background:linear-gradient(135deg,#0f172a,#1f2937);color:#fff;border-radius:12px;padding:20px;margin-bottom:16px;\">");
   parts.push("<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:100%;border-collapse:collapse;\"><tr>");
   parts.push("<td style=\"vertical-align:middle;\">");
   parts.push("<div style=\"font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:#9ca3af;margin:0 0 6px;\">Stolen Base</div>");
   parts.push("<h1 style=\"font-size:22px;line-height:1.25;margin:0 0 6px;font-weight:bold;\">" + escapeHtml_(CONFIG.promoHeadline) + "</h1>");
+  parts.push(
+    "<p style=\"font-size:17px;font-weight:bold;color:#f9fafb;margin:0 0 6px;line-height:1.3;\">" +
+      escapeHtml_(formatStealCallout_(steal)) +
+      "</p>"
+  );
   parts.push("<p style=\"color:#d1d5db;margin:0;font-size:14px;\">" + escapeHtml_(formatDisplayDate_(payload.dateChicago)) + " · Chicago</p>");
   parts.push("</td>");
   parts.push("<td style=\"vertical-align:middle;text-align:right;white-space:nowrap;\">");
-  parts.push(teamLogoImgHtml_(WHITE_SOX_ID, "Chicago White Sox", 58, "vertical-align:middle;margin-right:8px;background:#fff;border-radius:50%;padding:6px;"));
+  parts.push(teamLogoBadgeHtml_(WHITE_SOX_ID, "Chicago White Sox", 58, "darkSurface", "margin-right:8px;"));
   if (steal.opponentTeamId) {
-    parts.push(teamLogoImgHtml_(steal.opponentTeamId, steal.opponent, 58, "vertical-align:middle;background:#fff;border-radius:50%;padding:6px;"));
+    parts.push(teamLogoBadgeHtml_(steal.opponentTeamId, steal.opponent, 58, "darkSurface", ""));
   }
   parts.push("</td></tr></table>");
   parts.push("</div>");
 
-  parts.push("<div style=\"border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:16px;background:#fff;\">");
+  parts.push(
+    "<div style=\"border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:16px;background:#ffffff !important;background-color:#ffffff !important;color-scheme:light only;\">"
+  );
   parts.push("<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:100%;border-collapse:collapse;\"><tr>");
   if (steal.playerId) {
     parts.push(
@@ -415,14 +427,13 @@ function buildStealEmailHtml_(payload) {
   parts.push("<div style=\"font-size:21px;font-weight:bold;line-height:1.2;margin:0 0 4px;\">" + escapeHtml_(steal.playerName) + "</div>");
   parts.push("<div style=\"font-size:15px;color:#374151;margin:0 0 8px;\">" + escapeHtml_(steal.inningLabel) + " · stole " + escapeHtml_(steal.baseLabel) + "</div>");
   parts.push(
-    "<div style=\"font-size:14px;color:#4b5563;margin:0 0 10px;\">" +
-      teamLogoImgHtml_(steal.opponentTeamId, steal.opponent, 22, "vertical-align:middle;margin-right:6px;") +
-      "<span style=\"vertical-align:middle;\">vs " + escapeHtml_(steal.opponent) + "</span>" +
+    "<div style=\"font-size:14px;color:#4b5563;margin:0 0 12px;\">" +
+      "<span style=\"vertical-align:middle;\">vs </span>" +
+      teamLogoImgHtml_(steal.opponentTeamId, steal.opponent, 22, "vertical-align:middle;margin:0 6px;") +
+      "<span style=\"vertical-align:middle;\">" + escapeHtml_(steal.opponent) + "</span>" +
       "</div>"
   );
-  if (steal.description) {
-    parts.push("<div style=\"color:#6b7280;font-size:13px;line-height:1.5;margin:0 0 10px;\">" + escapeHtml_(steal.description) + "</div>");
-  }
+  parts.push(buildStealMlbPlayHtml_(steal));
   parts.push(buildButtonHtml_(gamedayUrl, "Watch on Gameday"));
   parts.push("</td></tr></table>");
   parts.push("</div>");
@@ -506,17 +517,49 @@ function buildPromoBlockPlain_() {
   return lines;
 }
 
+function buildStealMlbPlayHtml_(steal) {
+  var descriptions = getStealMlbDescriptions_(steal);
+  if (!descriptions.length) {
+    return "";
+  }
+  var parts = [];
+  parts.push(
+    "<div style=\"margin:0 0 14px;padding:14px 16px;background:#f9fafb;border-left:4px solid #0ea5e9;border-radius:0 8px 8px 0;\">"
+  );
+  parts.push("<div style=\"font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#6b7280;margin:0 0 8px;\">MLB play-by-play</div>");
+  for (var i = 0; i < descriptions.length; i++) {
+    var margin = i < descriptions.length - 1 ? "0 0 10px" : "0";
+    parts.push(
+      "<p style=\"font-size:16px;line-height:1.55;color:#111;margin:" +
+        margin +
+        ";font-style:italic;\">" +
+        escapeHtml_(descriptions[i]) +
+        "</p>"
+    );
+  }
+  parts.push("</div>");
+  return parts.join("");
+}
+
 function buildStealEmailPlain_(payload) {
   var steal = payload.steal;
+  var mlbLines = getStealMlbDescriptions_(steal);
   var lines = [
     CONFIG.promoHeadline,
+    formatStealCallout_(steal),
     formatDisplayDate_(payload.dateChicago),
     "",
-    steal.playerName + " stole " + steal.baseLabel,
-    steal.inningLabel + " vs " + steal.opponent,
-    steal.description || "",
-    "Gameday: https://www.mlb.com/gameday/" + steal.gamePk,
+    steal.playerName + " · " + steal.inningLabel + " vs " + steal.opponent,
   ];
+  if (mlbLines.length) {
+    lines.push("");
+    lines.push("MLB play-by-play:");
+    for (var m = 0; m < mlbLines.length; m++) {
+      lines.push(mlbLines[m]);
+    }
+  }
+  lines.push("");
+  lines.push("Gameday: https://www.mlb.com/gameday/" + steal.gamePk);
   lines.push("");
   lines.push(buildStealNextHomeBlockPlain_(payload.nextHomeGame, payload.isLastHomestandDay));
   lines.push("");
@@ -527,7 +570,10 @@ function buildStealEmailPlain_(payload) {
 function buildHomestandPreviewHtml_(payload) {
   var hs = payload.homestand;
   var parts = [];
-  parts.push("<div style=\"font-family:Arial,sans-serif;max-width:600px;color:#111;\">");
+  parts.push(buildEmailDarkModeGuardHtml_());
+  parts.push(
+    "<div class=\"sox-email-root\" style=\"font-family:Arial,sans-serif;max-width:600px;color:#111;color-scheme:light only;\">"
+  );
   parts.push(buildHomestandHeaderHtml_("White Sox homestand starts today", formatDisplayDate_(payload.dateChicago) + " · " + hs.homeGames.length + " home games"));
   parts.push("<p style=\"margin:0 0 12px;color:#374151;\">" + escapeHtml_(CONFIG.homestandPromoLine) + "</p>");
   parts.push(buildPromoCtaRowHtml_());
@@ -540,7 +586,11 @@ function buildHomestandPreviewHtml_(payload) {
 function buildHomestandHeaderHtml_(title, subline) {
   var parts = [];
   parts.push("<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:100%;border-collapse:collapse;margin-bottom:14px;\"><tr>");
-  parts.push("<td style=\"vertical-align:middle;width:60px;padding-right:12px;\">" + teamLogoImgHtml_(WHITE_SOX_ID, "Chicago White Sox", 48, "display:block;") + "</td>");
+  parts.push(
+    "<td style=\"vertical-align:middle;width:60px;padding-right:12px;\">" +
+      teamLogoImgHtml_(WHITE_SOX_ID, "Chicago White Sox", 48, "display:block;") +
+      "</td>"
+  );
   parts.push("<td style=\"vertical-align:middle;\">");
   parts.push("<h1 style=\"font-size:20px;margin:0 0 4px;line-height:1.25;\">" + escapeHtml_(title) + "</h1>");
   parts.push("<p style=\"color:#6b7280;margin:0;font-size:14px;\">" + escapeHtml_(subline) + "</p>");
@@ -559,7 +609,10 @@ function buildHomestandPreviewPlain_(payload) {
 
 function buildHomestandEndNoStealHtml_(payload) {
   var parts = [];
-  parts.push("<div style=\"font-family:Arial,sans-serif;max-width:600px;color:#111;\">");
+  parts.push(buildEmailDarkModeGuardHtml_());
+  parts.push(
+    "<div class=\"sox-email-root\" style=\"font-family:Arial,sans-serif;max-width:600px;color:#111;color-scheme:light only;\">"
+  );
   parts.push(
     buildHomestandHeaderHtml_(
       "Game ended — no steals today",
@@ -649,15 +702,26 @@ function buildHomestandGamesTablePlain_(homestand) {
   return lines.join("\n");
 }
 
-function teamLogoUrl_(teamId) {
+/** Minimal CSS — Gmail Android ignores most of this but Apple Mail / some clients benefit. */
+function buildEmailDarkModeGuardHtml_() {
+  return (
+    "<style type=\"text/css\">" +
+    ".sox-email-root{color-scheme:light only;supported-color-schemes:light;}" +
+    "</style>"
+  );
+}
+
+function teamLogoUrl_(teamId, onDark) {
   if (!teamId) {
     return "";
   }
-  return CONFIG.teamLogoUrlTemplate.replace("{teamId}", String(teamId));
+  var tpl = onDark ? CONFIG.teamLogoUrlOnDark : CONFIG.teamLogoUrlOnLight;
+  return tpl.replace("{teamId}", String(teamId));
 }
 
+/** Plain cap logo (on-light art) for light backgrounds — no circle. */
 function teamLogoImgHtml_(teamId, alt, size, extraStyle) {
-  var url = teamLogoUrl_(teamId);
+  var url = teamLogoUrl_(teamId, false);
   if (!url) {
     return "";
   }
@@ -674,6 +738,30 @@ function teamLogoImgHtml_(teamId, alt, size, extraStyle) {
     "\" style=\"display:inline-block;" +
     (extraStyle || "") +
     "\" />"
+  );
+}
+
+/** On-dark cap logo for the dark header gradient — no circle. */
+function teamLogoBadgeHtml_(teamId, alt, size, scheme, wrapStyle) {
+  if (!teamId || scheme !== "darkSurface") {
+    return teamLogoImgHtml_(teamId, alt, size, wrapStyle);
+  }
+  var px = size || 24;
+  var url = teamLogoUrl_(teamId, true);
+  return (
+    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"display:inline-table;border-collapse:collapse;vertical-align:middle;" +
+    (wrapStyle || "") +
+    "\"><tr><td align=\"center\" valign=\"middle\" style=\"padding:2px;line-height:0;\">" +
+    "<img src=\"" +
+    url +
+    "\" width=\"" +
+    px +
+    "\" height=\"" +
+    px +
+    "\" alt=\"" +
+    escapeHtml_(alt || "Team logo") +
+    "\" style=\"display:block;border:0;outline:none;\" />" +
+    "</td></tr></table>"
   );
 }
 
@@ -713,19 +801,15 @@ function buildNextHomeGameBodyHtml_(nextHomeGame) {
     "https://www.mlb.com/whitesox/schedule/" + nextHomeGame.officialDate;
   var parts = [];
   parts.push(
-    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:100%;border-collapse:collapse;\">" +
-      "<tr><td style=\"vertical-align:middle;text-align:left;\">" +
-      teamLogoImgHtml_(WHITE_SOX_ID, "Chicago White Sox", 36, "vertical-align:middle;") +
-      "</td>" +
-      "<td style=\"vertical-align:middle;text-align:center;width:40px;\">" +
-      "<span style=\"display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:bold;letter-spacing:0.5px;\">vs</span>" +
-      "</td>" +
-      "<td style=\"vertical-align:middle;text-align:left;\">" +
+    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;margin:0 0 10px;\">" +
+      "<tr><td style=\"vertical-align:middle;padding:0;white-space:nowrap;\">" +
+      teamLogoImgHtml_(WHITE_SOX_ID, "Chicago White Sox", 36, "vertical-align:middle;margin-right:10px;") +
+      "<span style=\"display:inline-block;vertical-align:middle;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:bold;letter-spacing:0.5px;margin-right:10px;\">vs</span>" +
       teamLogoImgHtml_(nextHomeGame.opponentTeamId, nextHomeGame.opponent, 36, "vertical-align:middle;") +
       "</td></tr></table>"
   );
   parts.push(
-    "<p style=\"margin:10px 0 12px;font-size:15px;color:#111;\"><strong>" +
+    "<p style=\"margin:0 0 12px;font-size:15px;color:#111;line-height:1.45;\"><strong>" +
       escapeHtml_(formatDisplayDate_(nextHomeGame.officialDate)) +
       "</strong> · " +
       escapeHtml_(nextHomeGame.opponent) +
@@ -752,9 +836,32 @@ function buildNextHomeGameBodyPlain_(nextHomeGame) {
 
 // --- Play-by-play ----------------------------------------------------------
 
+/** e.g. "Miguel Vargas stole 2B" */
+function formatStealCallout_(steal) {
+  var name = (steal && steal.playerName) || "White Sox";
+  var base = (steal && steal.baseLabel) || "a base";
+  return name + " stole " + base;
+}
+
+/** MLB play-by-play text for the email body (steal line + parent at-bat when available). */
+function getStealMlbDescriptions_(steal) {
+  var lines = [];
+  if (steal && steal.description) {
+    lines.push(String(steal.description).trim());
+  }
+  if (steal && steal.atBatDescription) {
+    var atBat = String(steal.atBatDescription).trim();
+    if (atBat && lines.indexOf(atBat) === -1) {
+      lines.push(atBat);
+    }
+  }
+  return lines;
+}
+
 /**
  * Stolen bases by White Sox (home team) from live feed.
- * @returns {Array<{gamePk:number,playerId:number,playerName:string,description:string,inningLabel:string,baseLabel:string,opponent:string,opponentTeamId:number,status:string,atBatIndex:number,sortInning:number}>}
+ * Steals may be a top-level play or a playEvent inside an at-bat (common in recent feeds).
+ * @returns {Array<{gamePk:number,playerId:number,playerName:string,description:string,inningLabel:string,baseLabel:string,opponent:string,opponentTeamId:number,status:string,atBatIndex:number,playEventIndex:number,sortKey:number}>}
  */
 function getHomeStealsFromFeed_(gamePk, opponent, status, opponentTeamId) {
   var url = MLB_FEED_API + "/game/" + gamePk + "/feed/live";
@@ -764,34 +871,73 @@ function getHomeStealsFromFeed_(gamePk, opponent, status, opponentTeamId) {
 
   for (var i = 0; i < plays.length; i++) {
     var play = plays[i];
-    if (!play.result || !isStolenBaseEventType_(play.result.eventType)) {
-      continue;
-    }
-    if (!isSoxRunnerSteal_(play, feed)) {
-      continue;
-    }
+    var stealEvents = collectStealEventsFromPlay_(play);
+    for (var e = 0; e < stealEvents.length; e++) {
+      var ev = stealEvents[e];
+      if (!isHomeTeamSteal_(play, ev, feed)) {
+        continue;
+      }
 
-    var runner = extractStealRunner_(play);
-    var about = play.about || {};
-    var half = about.halfInning === "top" ? "Top" : "Bot";
-    var inningNum = about.inning || 0;
+      var runner = resolveStealRunner_(play, ev, feed);
+      var about = play.about || {};
+      var half = about.halfInning === "top" ? "Top" : "Bot";
+      var inningNum = about.inning || 0;
+      var atBatIndex = about.atBatIndex != null ? about.atBatIndex : i;
+      var playEventIndex = ev.playEventIndex != null ? ev.playEventIndex : 0;
 
-    out.push({
-      gamePk: gamePk,
-      playerId: runner.id,
-      playerName: runner.name,
-      description: play.result.description || "",
-      inningLabel: half + " " + inningNum,
-      baseLabel: parseStolenBaseLabel_(play.result.eventType, play.result.event),
-      opponent: opponent,
-      opponentTeamId: opponentTeamId,
-      status: status,
-      atBatIndex: about.atBatIndex != null ? about.atBatIndex : i,
-      sortInning: inningNum * 2 + (about.halfInning === "bottom" ? 1 : 0),
-    });
+      var atBatDescription =
+        ev.source === "playEvent" && play.result && play.result.description ? play.result.description : "";
+
+      out.push({
+        gamePk: gamePk,
+        playerId: runner.id,
+        playerName: runner.name,
+        description: ev.description || "",
+        atBatDescription: atBatDescription,
+        inningLabel: half + " " + inningNum,
+        baseLabel: parseStolenBaseLabel_(ev.eventType, ev.event),
+        opponent: opponent,
+        opponentTeamId: opponentTeamId,
+        status: status,
+        atBatIndex: atBatIndex,
+        playEventIndex: playEventIndex,
+        sortKey: inningNum * 100000 + (about.halfInning === "bottom" ? 50000 : 0) + atBatIndex * 100 + playEventIndex,
+      });
+    }
   }
 
   return out;
+}
+
+/** Standalone steal play or embedded playEvent (e.g. steal during a single). */
+function collectStealEventsFromPlay_(play) {
+  var events = [];
+  if (play.result && isStolenBaseEventType_(play.result.eventType)) {
+    events.push({
+      source: "result",
+      eventType: play.result.eventType,
+      event: play.result.event,
+      description: play.result.description || "",
+      playEventIndex: 0,
+    });
+  }
+  var playEvents = play.playEvents || [];
+  for (var p = 0; p < playEvents.length; p++) {
+    var pe = playEvents[p];
+    var det = pe.details || {};
+    if (!isStolenBaseEventType_(det.eventType)) {
+      continue;
+    }
+    events.push({
+      source: "playEvent",
+      playEvent: pe,
+      eventType: det.eventType,
+      event: det.event,
+      description: det.description || "",
+      playEventIndex: pe.index != null ? pe.index : p,
+    });
+  }
+  return events;
 }
 
 /** MLB API uses stolen_base_2b / stolen_base_3b / stolen_base_home, never bare "stolen_base". */
@@ -802,7 +948,7 @@ function isStolenBaseEventType_(eventType) {
   return eventType.indexOf("stolen_base") === 0;
 }
 
-function isSoxRunnerSteal_(play, feed) {
+function isHomeTeamSteal_(play, stealEvent, feed) {
   var homeTeamId =
     feed.gameData &&
     feed.gameData.teams &&
@@ -811,17 +957,45 @@ function isSoxRunnerSteal_(play, feed) {
   if (!homeTeamId) {
     return play.about && play.about.halfInning === "bottom";
   }
+
   var runners = play.runners || [];
   for (var r = 0; r < runners.length; r++) {
     var details = runners[r].details || {};
-    if (isStolenBaseEventType_(details.eventType) && details.runner && details.runner.id) {
-      var teamId = details.team && details.team.id;
-      if (teamId === homeTeamId) {
-        return true;
+    if (!isStolenBaseEventType_(details.eventType) || !details.runner || !details.runner.id) {
+      continue;
+    }
+    if (stealEvent.source === "playEvent" && stealEvent.playEvent && stealEvent.playEvent.player) {
+      if (details.runner.id !== stealEvent.playEvent.player.id) {
+        continue;
       }
     }
+    var teamId = details.team && details.team.id;
+    if (teamId === homeTeamId) {
+      return true;
+    }
   }
+
+  if (stealEvent.source === "playEvent" && stealEvent.playEvent && stealEvent.playEvent.player) {
+    var playerId = stealEvent.playEvent.player.id;
+    if (isPlayerOnTeamInFeed_(playerId, homeTeamId, feed)) {
+      return true;
+    }
+  }
+
   return play.about && play.about.halfInning === "bottom";
+}
+
+function resolveStealRunner_(play, stealEvent, feed) {
+  if (stealEvent.source === "playEvent" && stealEvent.playEvent && stealEvent.playEvent.player) {
+    var pePlayer = stealEvent.playEvent.player;
+    var id = pePlayer.id;
+    var name =
+      lookupPlayerNameInFeed_(id, feed) ||
+      parseRunnerNameFromStealDescription_(stealEvent.description) ||
+      "Unknown";
+    return { id: id, name: name };
+  }
+  return extractStealRunner_(play);
 }
 
 function extractStealRunner_(play) {
@@ -837,6 +1011,86 @@ function extractStealRunner_(play) {
     return { id: batter.id, name: batter.fullName || "Unknown" };
   }
   return { id: 0, name: "White Sox runner" };
+}
+
+function lookupPlayerNameInFeed_(playerId, feed) {
+  if (!playerId || !feed || !feed.liveData || !feed.liveData.boxscore) {
+    return "";
+  }
+  var teams = feed.liveData.boxscore.teams || {};
+  for (var side in teams) {
+    if (!teams.hasOwnProperty(side)) {
+      continue;
+    }
+    var players = (teams[side] && teams[side].players) || {};
+    for (var key in players) {
+      if (!players.hasOwnProperty(key)) {
+        continue;
+      }
+      var person = players[key].person;
+      if (person && person.id === playerId) {
+        return person.fullName || "";
+      }
+    }
+  }
+  return "";
+}
+
+function isPlayerOnTeamInFeed_(playerId, teamId, feed) {
+  if (!playerId || !teamId || !feed || !feed.liveData || !feed.liveData.boxscore) {
+    return false;
+  }
+  var teams = feed.liveData.boxscore.teams || {};
+  for (var side in teams) {
+    if (!teams.hasOwnProperty(side)) {
+      continue;
+    }
+    var team = teams[side].team;
+    if (!team || team.id !== teamId) {
+      continue;
+    }
+    var players = teams[side].players || {};
+    for (var key in players) {
+      if (!players.hasOwnProperty(key)) {
+        continue;
+      }
+      var person = players[key].person;
+      if (person && person.id === playerId) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function parseRunnerNameFromStealDescription_(description) {
+  if (!description) {
+    return "";
+  }
+  var m = String(description).match(/^(.+?)\s+steals?\b/i);
+  return m ? m[1].trim() : "";
+}
+
+/** First home player with a stolen base in the boxscore (fallback when feed has no steal plays). */
+function getHomeStealerFromBoxscore_(gamePk) {
+  var box = fetchJson_(MLB_API + "/game/" + gamePk + "/boxscore");
+  var home = box.teams && box.teams.home;
+  if (!home || !home.players) {
+    return null;
+  }
+  var players = home.players;
+  for (var key in players) {
+    if (!players.hasOwnProperty(key)) {
+      continue;
+    }
+    var p = players[key];
+    var sb = p.stats && p.stats.batting && p.stats.batting.stolenBases;
+    if (sb && parseInt(sb, 10) > 0) {
+      var person = p.person || {};
+      return { id: person.id || 0, name: person.fullName || "White Sox" };
+    }
+  }
+  return null;
 }
 
 /**
@@ -870,26 +1124,31 @@ function parseStolenBaseLabel_(eventType, eventStr) {
 }
 
 function compareStealsChronologically_(a, b) {
-  if (a.sortInning !== b.sortInning) {
-    return a.sortInning - b.sortInning;
+  var ka = a.sortKey != null ? a.sortKey : 0;
+  var kb = b.sortKey != null ? b.sortKey : 0;
+  if (ka !== kb) {
+    return ka - kb;
   }
   return (a.atBatIndex || 0) - (b.atBatIndex || 0);
 }
 
 function buildFallbackSteal_(game, totalSb) {
   var box = boxscoreHomeSteals_(game.gamePk);
+  var stealer = getHomeStealerFromBoxscore_(game.gamePk);
   return {
     gamePk: game.gamePk,
-    playerId: 0,
-    playerName: "White Sox",
-    description: totalSb + " stolen base(s) at home today",
+    playerId: stealer ? stealer.id : 0,
+    playerName: stealer ? stealer.name : "White Sox",
+    description: "",
+    atBatDescription: "",
     inningLabel: "Today",
-    baseLabel: "—",
+    baseLabel: "a base",
     opponent: box.opponent,
     opponentTeamId: box.opponentTeamId,
     status: game.abstractGameState || "",
     atBatIndex: 0,
-    sortInning: 0,
+    playEventIndex: 0,
+    sortKey: 0,
   };
 }
 
@@ -1164,12 +1423,12 @@ function logAllLatches() {
 // --- Tests -----------------------------------------------------------------
 
 /**
- * Steal email test — REAL MLB data for gamePk (default 746789, a past game with a home SB).
+ * Steal email test — REAL MLB data for gamePk (default 824595 / pass another gamePk).
  * Email header date is TODAY (Chicago). Uses same homestand / next-home logic as production.
  */
 function testStealEmail(gamePk) {
   var todayChicago = chicagoDateString_(new Date());
-  var pk = gamePk || 746789;
+  var pk = gamePk || 824595;
   var homestands = buildHomestandsFromScheduleAround_(todayChicago);
   var homestand = getHomestandForDate_(homestands, todayChicago);
   var nextHomeGame = getNextHomeGameAfterFromHomestands_(homestands, todayChicago);
