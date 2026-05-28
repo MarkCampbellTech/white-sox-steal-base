@@ -80,3 +80,7 @@ Test helpers send **real emails** using live schedule data. Run from the Apps Sc
 ## Disclaimer
 
 Unofficial fan project. Not affiliated with, endorsed by, or sponsored by **Gas N Wash**, **MLB**, or the **Chicago White Sox**. Promo rules and eligibility are defined by Gas N Wash; always confirm details on the [official Steal a Wash page](https://www.gasnwash.net/steal-a-wash/).
+
+## License
+
+[MIT](LICENSE)
