@@ -1,3 +1,6 @@
 # clasp configuration and credentials
 .clasp.json
 .clasprc.json
+
+# local dev tooling
+node_modules/

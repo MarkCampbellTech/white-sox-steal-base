@@ -1,0 +1,12 @@
+{
+  "name": "white-sox-steal-alerts",
+  "private": true,
+  "description": "Local dev tooling for the White Sox Steal a Wash Google Apps Script project",
+  "scripts": {
+    "smoke-test": "node scripts/smoke-test.mjs",
+    "validate": "node scripts/smoke-test.mjs"
+  },
+  "devDependencies": {
+    "@google/clasp": "^3.0.6"
+  }
+}
