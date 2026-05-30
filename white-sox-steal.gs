@@ -47,6 +47,53 @@ var CONFIG = {
     "https://www.mlbstatic.com/team-logos/team-cap-on-light/{teamId}.svg",
   teamLogoUrlOnDark:
     "https://www.mlbstatic.com/team-logos/team-cap-on-dark/{teamId}.svg",
+  // Thin ring drawn around each team-color logo circle so dark team colors
+  // (e.g. White Sox black) still separate cleanly from the dark header.
+  teamBadgeRingColor: "#f1f5f9",
+  // Fallback circle color when a team id is missing from TEAM_COLORS.
+  teamBadgeFallbackColor: "#1f2937",
+};
+
+// --- Team colors -----------------------------------------------------------
+//
+// MLB's Stats API (statsapi.mlb.com) does NOT expose team brand colors, so this
+// is a curated map of each club's primary brand color keyed by MLB team id. The
+// colors are used as the background of the circular "badge" behind each team's
+// cap logo in the email header, mimicking the team-colored score-bug circles
+// MLB shows in live notifications. The cap logo art itself still comes from the
+// MLB CDN (team-cap-on-dark / team-cap-on-light), and the on-dark vs on-light
+// variant is chosen automatically based on the circle's brightness.
+var TEAM_COLORS = {
+  108: "#BA0021", // Los Angeles Angels
+  109: "#A71930", // Arizona Diamondbacks
+  110: "#DF4601", // Baltimore Orioles
+  111: "#BD3039", // Boston Red Sox
+  112: "#0E3386", // Chicago Cubs
+  113: "#C6011F", // Cincinnati Reds
+  114: "#0C2340", // Cleveland Guardians
+  115: "#33006F", // Colorado Rockies
+  116: "#0C2340", // Detroit Tigers
+  117: "#002D62", // Houston Astros
+  118: "#004687", // Kansas City Royals
+  119: "#005A9C", // Los Angeles Dodgers
+  120: "#14225A", // Washington Nationals
+  121: "#002D72", // New York Mets
+  133: "#003831", // Athletics
+  134: "#27251F", // Pittsburgh Pirates
+  135: "#2F241D", // San Diego Padres
+  136: "#0C2C56", // Seattle Mariners
+  137: "#FD5A1E", // San Francisco Giants
+  138: "#C41E3A", // St. Louis Cardinals
+  139: "#092C5C", // Tampa Bay Rays
+  140: "#003278", // Texas Rangers
+  141: "#134A8E", // Toronto Blue Jays
+  142: "#002B5C", // Minnesota Twins
+  143: "#E81828", // Philadelphia Phillies
+  144: "#13274F", // Atlanta Braves
+  145: "#27251F", // Chicago White Sox
+  146: "#00A3E0", // Miami Marlins
+  147: "#0C2340", // New York Yankees
+  158: "#12284B", // Milwaukee Brewers
 };
 
 // --- Logging ---------------------------------------------------------------
@@ -404,11 +451,8 @@ function buildStealEmailHtml_(payload) {
   );
   parts.push("<p style=\"color:#d1d5db;margin:0;font-size:14px;\">" + escapeHtml_(formatDisplayDate_(payload.dateChicago)) + " · Chicago</p>");
   parts.push("</td>");
-  parts.push("<td style=\"vertical-align:middle;text-align:right;white-space:nowrap;\">");
-  parts.push(teamLogoBadgeHtml_(WHITE_SOX_ID, "Chicago White Sox", 58, "darkSurface", "margin-right:8px;"));
-  if (steal.opponentTeamId) {
-    parts.push(teamLogoBadgeHtml_(steal.opponentTeamId, steal.opponent, 58, "darkSurface", ""));
-  }
+  parts.push("<td style=\"vertical-align:middle;text-align:right;white-space:nowrap;padding-left:12px;\">");
+  parts.push(buildMatchupBadgesHtml_(WHITE_SOX_ID, "Chicago White Sox", steal.opponentTeamId, steal.opponent, 58));
   parts.push("</td></tr></table>");
   parts.push("</div>");
 
@@ -763,6 +807,127 @@ function teamLogoBadgeHtml_(teamId, alt, size, scheme, wrapStyle) {
     "\" style=\"display:block;border:0;outline:none;\" />" +
     "</td></tr></table>"
   );
+}
+
+/** Primary brand color for a team id, with a neutral fallback. */
+function teamPrimaryColor_(teamId) {
+  if (teamId && TEAM_COLORS[teamId]) {
+    return TEAM_COLORS[teamId];
+  }
+  return CONFIG.teamBadgeFallbackColor;
+}
+
+/** Perceived brightness (0–255) of a #RRGGBB color; higher = lighter. */
+function colorBrightness_(hex) {
+  var m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || ""));
+  if (!m) {
+    return 0;
+  }
+  var n = parseInt(m[1], 16);
+  var r = (n >> 16) & 255;
+  var g = (n >> 8) & 255;
+  var b = n & 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+/**
+ * Circular team badge: the team's cap logo centered on a circle filled with the
+ * club's primary brand color, ringed with a thin light border so it reads on any
+ * background. The on-dark vs on-light cap art is chosen from the circle's
+ * brightness so the logo always contrasts with its color.
+ */
+function teamColorBadgeHtml_(teamId, alt, circleSize, logoSize, wrapStyle) {
+  if (!teamId) {
+    return "";
+  }
+  var diameter = circleSize || 58;
+  var logoPx = logoSize || Math.round(diameter * 0.64);
+  var color = teamPrimaryColor_(teamId);
+  var onDark = colorBrightness_(color) < 140;
+  var url = teamLogoUrl_(teamId, onDark);
+  return (
+    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"display:inline-table;border-collapse:separate;vertical-align:middle;" +
+    (wrapStyle || "") +
+    "\"><tr><td align=\"center\" valign=\"middle\" width=\"" +
+    diameter +
+    "\" height=\"" +
+    diameter +
+    "\" style=\"width:" +
+    diameter +
+    "px;height:" +
+    diameter +
+    "px;background-color:" +
+    color +
+    ";border:2px solid " +
+    CONFIG.teamBadgeRingColor +
+    ";border-radius:50%;line-height:0;text-align:center;mso-padding-alt:0;\">" +
+    "<img src=\"" +
+    url +
+    "\" width=\"" +
+    logoPx +
+    "\" height=\"" +
+    logoPx +
+    "\" alt=\"" +
+    escapeHtml_(alt || "Team logo") +
+    "\" style=\"display:inline-block;border:0;outline:none;vertical-align:middle;\" />" +
+    "</td></tr></table>"
+  );
+}
+
+/** Small neutral "vs" puck shown between the two team badges. */
+function vsBadgeHtml_(size, wrapStyle) {
+  var diameter = size || 30;
+  return (
+    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"display:inline-table;border-collapse:separate;vertical-align:middle;" +
+    (wrapStyle || "") +
+    "\"><tr><td align=\"center\" valign=\"middle\" width=\"" +
+    diameter +
+    "\" height=\"" +
+    diameter +
+    "\" style=\"width:" +
+    diameter +
+    "px;height:" +
+    diameter +
+    "px;background-color:#ffffff;border-radius:50%;text-align:center;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;letter-spacing:0.5px;color:#1f2937;text-transform:uppercase;line-height:" +
+    diameter +
+    "px;\">vs</td></tr></table>"
+  );
+}
+
+/**
+ * Matchup header art: two team-color badges with a "vs" puck between them.
+ * The badges are nudged vertically (home up, away down) so they read as a
+ * diagonal score-bug; clients that drop the padding offsets degrade gracefully
+ * to a clean side-by-side row.
+ */
+function buildMatchupBadgesHtml_(homeTeamId, homeName, awayTeamId, awayName, circleSize) {
+  var diameter = circleSize || 58;
+  var offset = Math.round(diameter * 0.32);
+  var vsSize = Math.round(diameter * 0.52);
+  if (!awayTeamId) {
+    return teamColorBadgeHtml_(homeTeamId, homeName, diameter);
+  }
+  var parts = [];
+  parts.push(
+    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"display:inline-table;border-collapse:collapse;\"><tr>"
+  );
+  parts.push(
+    "<td valign=\"top\" style=\"padding:0 0 " + offset + "px 0;line-height:0;\">" +
+      teamColorBadgeHtml_(homeTeamId, homeName, diameter) +
+      "</td>"
+  );
+  parts.push(
+    "<td valign=\"middle\" style=\"padding:0 6px;line-height:0;\">" +
+      vsBadgeHtml_(vsSize) +
+      "</td>"
+  );
+  parts.push(
+    "<td valign=\"bottom\" style=\"padding:" + offset + "px 0 0 0;line-height:0;\">" +
+      teamColorBadgeHtml_(awayTeamId, awayName, diameter) +
+      "</td>"
+  );
+  parts.push("</tr></table>");
+  return parts.join("");
 }
 
 /** Steal email: always show next home game; homestand-finale copy on last home day before a road trip. */
