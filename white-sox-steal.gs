@@ -45,55 +45,6 @@ var CONFIG = {
     "https://img.mlbstatic.com/mlb-photos/image/upload/w_120,q_auto:best/v1/people/{playerId}/headshot/silo/current",
   teamLogoUrlOnLight:
     "https://www.mlbstatic.com/team-logos/team-cap-on-light/{teamId}.svg",
-  teamLogoUrlOnDark:
-    "https://www.mlbstatic.com/team-logos/team-cap-on-dark/{teamId}.svg",
-  // Thin ring drawn around each team-color logo circle so dark team colors
-  // (e.g. White Sox black) still separate cleanly from the dark header.
-  teamBadgeRingColor: "#f1f5f9",
-  // Fallback circle color when a team id is missing from TEAM_COLORS.
-  teamBadgeFallbackColor: "#1f2937",
-};
-
-// --- Team colors -----------------------------------------------------------
-//
-// MLB's Stats API (statsapi.mlb.com) does NOT expose team brand colors, so this
-// is a curated map of each club's primary brand color keyed by MLB team id. The
-// colors are used as the background of the circular "badge" behind each team's
-// cap logo in the email header, mimicking the team-colored score-bug circles
-// MLB shows in live notifications. The cap logo art itself still comes from the
-// MLB CDN (team-cap-on-dark / team-cap-on-light), and the on-dark vs on-light
-// variant is chosen automatically based on the circle's brightness.
-var TEAM_COLORS = {
-  108: "#BA0021", // Los Angeles Angels
-  109: "#A71930", // Arizona Diamondbacks
-  110: "#DF4601", // Baltimore Orioles
-  111: "#BD3039", // Boston Red Sox
-  112: "#0E3386", // Chicago Cubs
-  113: "#C6011F", // Cincinnati Reds
-  114: "#0C2340", // Cleveland Guardians
-  115: "#33006F", // Colorado Rockies
-  116: "#0C2340", // Detroit Tigers
-  117: "#002D62", // Houston Astros
-  118: "#004687", // Kansas City Royals
-  119: "#005A9C", // Los Angeles Dodgers
-  120: "#14225A", // Washington Nationals
-  121: "#002D72", // New York Mets
-  133: "#003831", // Athletics
-  134: "#27251F", // Pittsburgh Pirates
-  135: "#2F241D", // San Diego Padres
-  136: "#0C2C56", // Seattle Mariners
-  137: "#FD5A1E", // San Francisco Giants
-  138: "#C41E3A", // St. Louis Cardinals
-  139: "#092C5C", // Tampa Bay Rays
-  140: "#003278", // Texas Rangers
-  141: "#134A8E", // Toronto Blue Jays
-  142: "#002B5C", // Minnesota Twins
-  143: "#E81828", // Philadelphia Phillies
-  144: "#13274F", // Atlanta Braves
-  145: "#27251F", // Chicago White Sox
-  146: "#00A3E0", // Miami Marlins
-  147: "#0C2340", // New York Yankees
-  158: "#12284B", // Milwaukee Brewers
 };
 
 // --- Logging ---------------------------------------------------------------
@@ -209,9 +160,8 @@ function checkSoxHomeStealsToday() {
           : "more home games remain in this homestand OR not last calendar day of stand",
       });
 
-      notifyHomeSteal_({
+      sendStealEmailHtml_({
         dateChicago: todayChicago,
-        totalSteals: totalSb,
         steal: firstSteal,
         isLastHomestandDay: isLastHomestandDay,
         nextHomeGame: nextHomeGame,
@@ -350,19 +300,6 @@ function checkHomestandStartToday() {
 }
 
 // --- Notifications ---------------------------------------------------------
-
-/**
- * @param {{
- *   dateChicago: string,
- *   totalSteals: number,
- *   steal: Object,
- *   isLastHomestandDay?: boolean,
- *   nextHomeGame?: Object|null
- * }} payload
- */
-function notifyHomeSteal_(payload) {
-  sendStealEmailHtml_(payload);
-}
 
 /**
  * @param {{
@@ -759,20 +696,12 @@ function buildEmailDarkModeGuardHtml_() {
   );
 }
 
-function teamLogoUrl_(teamId, onDark) {
+/** Plain cap logo for light backgrounds — no circle. */
+function teamLogoImgHtml_(teamId, alt, size, extraStyle) {
   if (!teamId) {
     return "";
   }
-  var tpl = onDark ? CONFIG.teamLogoUrlOnDark : CONFIG.teamLogoUrlOnLight;
-  return tpl.replace("{teamId}", String(teamId));
-}
-
-/** Plain cap logo (on-light art) for light backgrounds — no circle. */
-function teamLogoImgHtml_(teamId, alt, size, extraStyle) {
-  var url = teamLogoUrl_(teamId, false);
-  if (!url) {
-    return "";
-  }
+  var url = CONFIG.teamLogoUrlOnLight.replace("{teamId}", String(teamId));
   var px = size || 24;
   return (
     "<img src=\"" +
@@ -787,51 +716,6 @@ function teamLogoImgHtml_(teamId, alt, size, extraStyle) {
     (extraStyle || "") +
     "\" />"
   );
-}
-
-/** On-dark cap logo for the dark header gradient — no circle. */
-function teamLogoBadgeHtml_(teamId, alt, size, scheme, wrapStyle) {
-  if (!teamId || scheme !== "darkSurface") {
-    return teamLogoImgHtml_(teamId, alt, size, wrapStyle);
-  }
-  var px = size || 24;
-  var url = teamLogoUrl_(teamId, true);
-  return (
-    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"display:inline-table;border-collapse:collapse;vertical-align:middle;" +
-    (wrapStyle || "") +
-    "\"><tr><td align=\"center\" valign=\"middle\" style=\"padding:2px;line-height:0;\">" +
-    "<img src=\"" +
-    url +
-    "\" width=\"" +
-    px +
-    "\" height=\"" +
-    px +
-    "\" alt=\"" +
-    escapeHtml_(alt || "Team logo") +
-    "\" style=\"display:block;border:0;outline:none;\" />" +
-    "</td></tr></table>"
-  );
-}
-
-/** Primary brand color for a team id, with a neutral fallback. */
-function teamPrimaryColor_(teamId) {
-  if (teamId && TEAM_COLORS[teamId]) {
-    return TEAM_COLORS[teamId];
-  }
-  return CONFIG.teamBadgeFallbackColor;
-}
-
-/** Perceived brightness (0–255) of a #RRGGBB color; higher = lighter. */
-function colorBrightness_(hex) {
-  var m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || ""));
-  if (!m) {
-    return 0;
-  }
-  var n = parseInt(m[1], 16);
-  var r = (n >> 16) & 255;
-  var g = (n >> 8) & 255;
-  var b = n & 255;
-  return 0.299 * r + 0.587 * g + 0.114 * b;
 }
 
 function teamSpotUrl_(teamId) {
@@ -1471,20 +1355,7 @@ function isLastHomestandHomeDate_(homestand, ymd) {
   return ymd === homestand.endDate;
 }
 
-/**
- * First home game strictly after ymd (by officialDate).
- */
-function getNextHomeGameAfter_(games, ymd) {
-  for (var i = 0; i < games.length; i++) {
-    var g = games[i];
-    if (g.isHome && g.officialDate > ymd) {
-      return g;
-    }
-  }
-  return null;
-}
-
-/** Same as getNextHomeGameAfter_, but searches an already-built homestand list (no extra API call). */
+/** First home game strictly after ymd, searching an already-built homestand list (no extra API call). */
 function getNextHomeGameAfterFromHomestands_(homestands, ymd) {
   for (var i = 0; i < homestands.length; i++) {
     var hs = homestands[i];
