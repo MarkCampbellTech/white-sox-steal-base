@@ -441,7 +441,7 @@ function buildStealEmailHtml_(payload) {
 
   parts.push("<div style=\"background:linear-gradient(135deg,#0f172a,#1f2937);color:#fff;border-radius:12px;padding:20px;margin-bottom:16px;\">");
   parts.push("<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:100%;border-collapse:collapse;\"><tr>");
-  parts.push("<td style=\"vertical-align:middle;\">");
+  parts.push("<td style=\"vertical-align:middle;width:100%;\">");
   parts.push("<div style=\"font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:#9ca3af;margin:0 0 6px;\">Stolen Base</div>");
   parts.push("<h1 style=\"font-size:22px;line-height:1.25;margin:0 0 6px;font-weight:bold;\">" + escapeHtml_(CONFIG.promoHeadline) + "</h1>");
   parts.push(
@@ -451,7 +451,9 @@ function buildStealEmailHtml_(payload) {
   );
   parts.push("<p style=\"color:#d1d5db;margin:0;font-size:14px;\">" + escapeHtml_(formatDisplayDate_(payload.dateChicago)) + " · Chicago</p>");
   parts.push("</td>");
-  parts.push("<td style=\"vertical-align:middle;text-align:right;white-space:nowrap;padding-left:12px;\">");
+  parts.push(
+    "<td width=\"1\" style=\"vertical-align:middle;text-align:right;white-space:nowrap;padding-left:12px;width:1%;line-height:0;font-size:0;\">"
+  );
   parts.push(buildMatchupBadgesHtml_(WHITE_SOX_ID, "Chicago White Sox", steal.opponentTeamId, steal.opponent, 58));
   parts.push("</td></tr></table>");
   parts.push("</div>");
@@ -749,6 +751,8 @@ function buildHomestandGamesTablePlain_(homestand) {
 /** Minimal CSS — Gmail Android ignores most of this but Apple Mail / some clients benefit. */
 function buildEmailDarkModeGuardHtml_() {
   return (
+    "<meta name=\"color-scheme\" content=\"light only\" />" +
+    "<meta name=\"supported-color-schemes\" content=\"light\" />" +
     "<style type=\"text/css\">" +
     ".sox-email-root{color-scheme:light only;supported-color-schemes:light;}" +
     "</style>"
@@ -830,47 +834,47 @@ function colorBrightness_(hex) {
   return 0.299 * r + 0.587 * g + 0.114 * b;
 }
 
+function teamSpotUrl_(teamId) {
+  if (!teamId) {
+    return "";
+  }
+  return "https://www.mlbstatic.com/team-logos/team-spot/" + teamId + ".svg";
+}
+
 /**
- * Circular team badge: the team's cap logo centered on a circle filled with the
- * club's primary brand color, ringed with a thin light border so it reads on any
- * background. The on-dark vs on-light cap art is chosen from the circle's
- * brightness so the logo always contrasts with its color.
+ * Circular team badge: uses MLB's official "team-spot" SVG which has the circle baked in.
+ * Since it's an image, Gmail Dark Mode won't aggressively invert the background colors.
  */
-function teamColorBadgeHtml_(teamId, alt, circleSize, logoSize, wrapStyle) {
+function teamColorBadgeHtml_(teamId, alt, circleSize, wrapStyle) {
   if (!teamId) {
     return "";
   }
   var diameter = circleSize || 58;
-  var logoPx = logoSize || Math.round(diameter * 0.64);
-  var color = teamPrimaryColor_(teamId);
-  var onDark = colorBrightness_(color) < 140;
-  var url = teamLogoUrl_(teamId, onDark);
+  var url = teamSpotUrl_(teamId);
   return (
-    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"display:inline-table;border-collapse:separate;vertical-align:middle;" +
-    (wrapStyle || "") +
-    "\"><tr><td align=\"center\" valign=\"middle\" width=\"" +
-    diameter +
-    "\" height=\"" +
-    diameter +
-    "\" style=\"width:" +
-    diameter +
-    "px;height:" +
-    diameter +
-    "px;background-color:" +
-    color +
-    ";border:2px solid " +
-    CONFIG.teamBadgeRingColor +
-    ";border-radius:50%;line-height:0;text-align:center;mso-padding-alt:0;\">" +
     "<img src=\"" +
     url +
     "\" width=\"" +
-    logoPx +
+    diameter +
     "\" height=\"" +
-    logoPx +
+    diameter +
     "\" alt=\"" +
     escapeHtml_(alt || "Team logo") +
-    "\" style=\"display:inline-block;border:0;outline:none;vertical-align:middle;\" />" +
-    "</td></tr></table>"
+    "\" style=\"display:inline-block;border:0;outline:none;border-radius:50%;width:" +
+    diameter +
+    "px;height:" +
+    diameter +
+    "px;min-width:" +
+    diameter +
+    "px;min-height:" +
+    diameter +
+    "px;max-width:" +
+    diameter +
+    "px;max-height:" +
+    diameter +
+    "px;vertical-align:middle;" +
+    (wrapStyle || "") +
+    "\" />"
   );
 }
 
@@ -884,13 +888,21 @@ function vsBadgeHtml_(size, wrapStyle) {
     diameter +
     "\" height=\"" +
     diameter +
-    "\" style=\"width:" +
+    "\" bgcolor=\"#ffffff\" style=\"width:" +
     diameter +
     "px;height:" +
     diameter +
-    "px;background-color:#ffffff;border-radius:50%;text-align:center;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;letter-spacing:0.5px;color:#1f2937;text-transform:uppercase;line-height:" +
+    "px;min-width:" +
     diameter +
-    "px;\">vs</td></tr></table>"
+    "px;min-height:" +
+    diameter +
+    "px;max-width:" +
+    diameter +
+    "px;max-height:" +
+    diameter +
+    "px;background-color:#ffffff;border:1px solid #e5e7eb;border-radius:50%;text-align:center;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;letter-spacing:0.5px;color:#374151;text-transform:uppercase;line-height:" +
+    (diameter - 2) +
+    "px;box-sizing:border-box;\">vs</td></tr></table>"
   );
 }
 
@@ -904,25 +916,40 @@ function buildMatchupBadgesHtml_(homeTeamId, homeName, awayTeamId, awayName, cir
   var diameter = circleSize || 58;
   var offset = Math.round(diameter * 0.32);
   var vsSize = Math.round(diameter * 0.52);
+  var gap = Math.max(4, Math.round(vsSize * 0.25));
   if (!awayTeamId) {
     return teamColorBadgeHtml_(homeTeamId, homeName, diameter);
   }
   var parts = [];
   parts.push(
-    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"display:inline-table;border-collapse:collapse;\"><tr>"
+    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"display:inline-table;border-collapse:collapse;table-layout:fixed;\"><tr>"
   );
   parts.push(
-    "<td valign=\"top\" style=\"padding:0 0 " + offset + "px 0;line-height:0;\">" +
+    "<td valign=\"top\" style=\"padding:0 " +
+      gap +
+      "px " +
+      offset +
+      "px 0;line-height:0;font-size:0;width:" +
+      diameter +
+      "px;\">" +
       teamColorBadgeHtml_(homeTeamId, homeName, diameter) +
       "</td>"
   );
   parts.push(
-    "<td valign=\"middle\" style=\"padding:0 6px;line-height:0;\">" +
+    "<td valign=\"middle\" style=\"padding:0;line-height:0;font-size:0;width:" +
+      vsSize +
+      "px;\">" +
       vsBadgeHtml_(vsSize) +
       "</td>"
   );
   parts.push(
-    "<td valign=\"bottom\" style=\"padding:" + offset + "px 0 0 0;line-height:0;\">" +
+    "<td valign=\"bottom\" style=\"padding:" +
+      offset +
+      "px 0 0 " +
+      gap +
+      "px;line-height:0;font-size:0;width:" +
+      diameter +
+      "px;\">" +
       teamColorBadgeHtml_(awayTeamId, awayName, diameter) +
       "</td>"
   );
