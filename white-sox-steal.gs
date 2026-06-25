@@ -10,6 +10,8 @@
  *
  * Latch keys (Script Properties):
  * - SOX_HOME_STEAL_NOTIFY_DATE — first steal email sent this Chicago calendar day
+ * - SOX_HOME_STEAL_REPORTED — JSON payload for the steal we alerted (for reversal checks)
+ * - SOX_HOME_STEAL_CORRECTION_SENT — date a steal-correction email was sent
  * - SOX_HOMESTAND_PREVIEW_START — homestand start date we already previewed
  * - SOX_HOMESTAND_END_NOTIFIED — homestand start date we sent “ended, no steal” recap
  */
@@ -22,6 +24,8 @@ var WHITE_SOX_ID = 145;
 var CHICAGO_TZ = "America/Chicago";
 
 var PROP_LAST_FIRED = "SOX_HOME_STEAL_NOTIFY_DATE";
+var PROP_STEAL_REPORTED = "SOX_HOME_STEAL_REPORTED";
+var PROP_STEAL_CORRECTION_SENT = "SOX_HOME_STEAL_CORRECTION_SENT";
 var PROP_HOMESTAND_PREVIEW = "SOX_HOMESTAND_PREVIEW_START";
 var PROP_HOMESTAND_END_NOTIFIED = "SOX_HOMESTAND_END_NOTIFIED";
 var PROP_NOTIFY_EMAIL = "NOTIFY_EMAIL";
@@ -62,6 +66,8 @@ function logLatches_(context) {
   var props = PropertiesService.getScriptProperties();
   log_(context + " — latches", {
     SOX_HOME_STEAL_NOTIFY_DATE: props.getProperty(PROP_LAST_FIRED) || "(unset)",
+    SOX_HOME_STEAL_REPORTED: props.getProperty(PROP_STEAL_REPORTED) ? "(set)" : "(unset)",
+    SOX_HOME_STEAL_CORRECTION_SENT: props.getProperty(PROP_STEAL_CORRECTION_SENT) || "(unset)",
     SOX_HOMESTAND_PREVIEW_START: props.getProperty(PROP_HOMESTAND_PREVIEW) || "(unset)",
     SOX_HOMESTAND_END_NOTIFIED: props.getProperty(PROP_HOMESTAND_END_NOTIFIED) || "(unset)",
   });
@@ -125,9 +131,13 @@ function checkSoxHomeStealsToday() {
   if (!stealAlreadySent) {
     var allSteals = [];
     var totalSb = 0;
+    var allGamesFinal = true;
 
     for (var i = 0; i < homeGames.length; i++) {
       var g = homeGames[i];
+      if (g.abstractGameState !== "Final") {
+        allGamesFinal = false;
+      }
       var box = boxscoreHomeSteals_(g.gamePk);
       totalSb += box.steals;
       log_("Boxscore steals", { gamePk: g.gamePk, opponent: box.opponent, steals: box.steals, status: g.abstractGameState });
@@ -141,35 +151,43 @@ function checkSoxHomeStealsToday() {
     log_("Steal totals for today", { totalSb: totalSb, feedPlayCount: allSteals.length });
 
     if (totalSb > 0) {
-      allSteals.sort(compareStealsChronologically_);
-      var firstSteal = allSteals.length ? allSteals[0] : buildFallbackSteal_(homeGames[0], totalSb);
-      log_("Sending steal email (first steal only)", {
-        player: firstSteal.playerName,
-        gamePk: firstSteal.gamePk,
-        inning: firstSteal.inningLabel,
-      });
+      if (!allSteals.length && !allGamesFinal) {
+        log_("Boxscore shows steals but feed has none — waiting (possible review or scoring lag)", {
+          totalSb: totalSb,
+          allGamesFinal: allGamesFinal,
+        });
+      } else {
+        allSteals.sort(compareStealsChronologically_);
+        var firstSteal = allSteals.length ? allSteals[0] : buildFallbackSteal_(homeGames[0], totalSb);
+        log_("Sending steal email (first steal only)", {
+          player: firstSteal.playerName,
+          gamePk: firstSteal.gamePk,
+          inning: firstSteal.inningLabel,
+        });
 
-      var nextHomeGame = getNextHomeGameAfterFromHomestands_(homestands, todayChicago);
-      var isLastHomestandDay = homestand && isLastHomestandHomeDate_(homestand, todayChicago);
-      log_("Steal email schedule context", {
-        homestand: homestand ? describeHomestand_(homestand) : "not in homestand today",
-        isLastHomestandDay: isLastHomestandDay,
-        nextHomeGame: nextHomeGame ? nextHomeGame.officialDate + " vs " + nextHomeGame.opponent : "(none in window)",
-        note: isLastHomestandDay
-          ? "last home day before road trip — homestand finale copy"
-          : "more home games remain in this homestand OR not last calendar day of stand",
-      });
+        var nextHomeGame = getNextHomeGameAfterFromHomestands_(homestands, todayChicago);
+        var isLastHomestandDay = homestand && isLastHomestandHomeDate_(homestand, todayChicago);
+        log_("Steal email schedule context", {
+          homestand: homestand ? describeHomestand_(homestand) : "not in homestand today",
+          isLastHomestandDay: isLastHomestandDay,
+          nextHomeGame: nextHomeGame ? nextHomeGame.officialDate + " vs " + nextHomeGame.opponent : "(none in window)",
+          note: isLastHomestandDay
+            ? "last home day before road trip — homestand finale copy"
+            : "more home games remain in this homestand OR not last calendar day of stand",
+        });
 
-      sendStealEmailHtml_({
-        dateChicago: todayChicago,
-        steal: firstSteal,
-        isLastHomestandDay: isLastHomestandDay,
-        nextHomeGame: nextHomeGame,
-      });
+        sendStealEmailHtml_({
+          dateChicago: todayChicago,
+          steal: firstSteal,
+          isLastHomestandDay: isLastHomestandDay,
+          nextHomeGame: nextHomeGame,
+        });
 
-      setLatch_(PROP_LAST_FIRED, todayChicago, "first steal email sent");
-      if (isLastHomestandDay && homestand) {
-        setLatch_(PROP_HOMESTAND_END_NOTIFIED, homestand.startDate, "steal on last homestand day — skip no-steal recap");
+        setLatch_(PROP_LAST_FIRED, todayChicago, "first steal email sent");
+        saveReportedSteal_(firstSteal, todayChicago);
+        if (isLastHomestandDay && homestand) {
+          setLatch_(PROP_HOMESTAND_END_NOTIFIED, homestand.startDate, "steal on last homestand day — skip no-steal recap");
+        }
       }
     } else {
       log_("Home game today — no steals yet", { todayChicago: todayChicago, totalSb: 0 });
@@ -180,6 +198,8 @@ function checkSoxHomeStealsToday() {
       value: lastFired,
     });
   }
+
+  checkStealReversalToday_(todayChicago, homeGames);
 
   checkHomestandEndNoStealToday_(todayChicago, homeGames, homestands, homestand);
   logLatches_("checkSoxHomeStealsToday — end");
@@ -359,6 +379,29 @@ function sendHomestandEndNoStealEmail_(payload) {
   });
   GmailApp.sendEmail(to, subject, buildHomestandEndNoStealPlain_(payload), {
     htmlBody: buildHomestandEndNoStealHtml_(payload),
+    name: CONFIG.senderName,
+  });
+}
+
+/**
+ * Correction when a reported steal was overturned (e.g. replay review → caught stealing).
+ * @param {{ dateChicago: string, reported: Object, reversal: Object }} payload
+ */
+function sendStealCorrectionEmail_(payload) {
+  var reported = payload.reported;
+  var to = getNotifyEmail_();
+  var opponent = reported.opponent || "opponent";
+  var subject = "CORRECTION — no stolen base — " + reported.playerName + " vs " + opponent;
+
+  log_("Gmail send — steal correction", {
+    to: to,
+    subject: subject,
+    player: reported.playerName,
+    gamePk: reported.gamePk,
+    reason: payload.reversal.reason,
+  });
+  GmailApp.sendEmail(to, subject, buildStealCorrectionPlain_(payload), {
+    htmlBody: buildStealCorrectionHtml_(payload),
     name: CONFIG.senderName,
   });
 }
@@ -545,6 +588,98 @@ function buildStealEmailPlain_(payload) {
   lines.push("Gameday: https://www.mlb.com/gameday/" + steal.gamePk);
   lines.push("");
   lines.push(buildStealNextHomeBlockPlain_(payload.nextHomeGame, payload.isLastHomestandDay));
+  lines.push("");
+  lines.push.apply(lines, buildPromoBlockPlain_());
+  return lines.join("\n");
+}
+
+function buildStealCorrectionHtml_(payload) {
+  var reported = payload.reported;
+  var reversal = payload.reversal || {};
+  var gamedayUrl = "https://www.mlb.com/gameday/" + reported.gamePk;
+  var parts = [];
+
+  parts.push(buildEmailDarkModeGuardHtml_());
+  parts.push(
+    "<div class=\"sox-email-root\" style=\"font-family:Arial,sans-serif;max-width:600px;color:#111;color-scheme:light only;\">"
+  );
+
+  parts.push("<div style=\"background:linear-gradient(135deg,#7f1d1d,#991b1b);color:#fff;border-radius:12px;padding:20px;margin-bottom:16px;\">");
+  parts.push("<div style=\"font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:#fecaca;margin:0 0 6px;\">Correction</div>");
+  parts.push("<h1 style=\"font-size:22px;line-height:1.25;margin:0 0 6px;font-weight:bold;\">No stolen base — call reversed</h1>");
+  parts.push(
+    "<p style=\"font-size:17px;font-weight:bold;color:#fef2f2;margin:0 0 6px;line-height:1.3;\">" +
+      escapeHtml_(reported.playerName) +
+      " was caught stealing, not safe on the steal</p>"
+  );
+  parts.push("<p style=\"color:#fecaca;margin:0;font-size:14px;\">" + escapeHtml_(formatDisplayDate_(payload.dateChicago)) + " · Chicago</p>");
+  parts.push("</div>");
+
+  parts.push(
+    "<div style=\"border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:16px;background:#ffffff !important;\">"
+  );
+  parts.push("<p style=\"margin:0 0 10px;color:#374151;font-size:15px;line-height:1.5;\">");
+  parts.push(
+    "An earlier alert said <strong>" +
+      escapeHtml_(reported.playerName) +
+      "</strong> stole " +
+      escapeHtml_(reported.baseLabel || "a base") +
+      " in the " +
+      escapeHtml_(reported.inningLabel || "game") +
+      " vs " +
+      escapeHtml_(reported.opponent) +
+      ". MLB scoring updated the play after a review — it is recorded as <strong>caught stealing</strong>, so the Steal a Wash promo does not apply for that play."
+  );
+  parts.push("</p>");
+
+  if (reversal.playDescription) {
+    parts.push(
+      "<div style=\"margin:0 0 14px;padding:14px 16px;background:#fef2f2;border-left:4px solid #dc2626;border-radius:0 8px 8px 0;\">"
+    );
+    parts.push("<div style=\"font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#991b1b;margin:0 0 8px;\">Official MLB scoring</div>");
+    parts.push(
+      "<p style=\"font-size:16px;line-height:1.55;color:#111;margin:0;font-style:italic;\">" +
+        escapeHtml_(reversal.playDescription) +
+        "</p>"
+    );
+    parts.push("</div>");
+  }
+
+  parts.push(buildButtonHtml_(gamedayUrl, "View on Gameday"));
+  parts.push("</div>");
+
+  parts.push(buildPromoBlockHtml_(false));
+  parts.push("</div>");
+  return parts.join("");
+}
+
+function buildStealCorrectionPlain_(payload) {
+  var reported = payload.reported;
+  var reversal = payload.reversal || {};
+  var lines = [
+    "CORRECTION — no stolen base",
+    "",
+    "An earlier alert said " +
+      reported.playerName +
+      " stole " +
+      (reported.baseLabel || "a base") +
+      " in the " +
+      (reported.inningLabel || "game") +
+      " vs " +
+      reported.opponent +
+      ".",
+    "MLB scoring updated the play after a review — it is recorded as caught stealing.",
+    "The Steal a Wash promo does not apply for that play.",
+    "",
+    formatDisplayDate_(payload.dateChicago),
+  ];
+  if (reversal.playDescription) {
+    lines.push("");
+    lines.push("Official MLB scoring:");
+    lines.push(reversal.playDescription);
+  }
+  lines.push("");
+  lines.push("Gameday: https://www.mlb.com/gameday/" + reported.gamePk);
   lines.push("");
   lines.push.apply(lines, buildPromoBlockPlain_());
   return lines.join("\n");
@@ -910,6 +1045,237 @@ function buildNextHomeGameBodyPlain_(nextHomeGame) {
   );
 }
 
+// --- Steal reversal tracking -----------------------------------------------
+
+function saveReportedSteal_(steal, dateChicago) {
+  var payload = {
+    dateChicago: dateChicago,
+    gamePk: steal.gamePk,
+    playerId: steal.playerId,
+    playerName: steal.playerName,
+    inningLabel: steal.inningLabel,
+    baseLabel: steal.baseLabel,
+    opponent: steal.opponent,
+    opponentTeamId: steal.opponentTeamId,
+    atBatIndex: steal.atBatIndex,
+    playEventIndex: steal.playEventIndex,
+    description: steal.description || "",
+    atBatDescription: steal.atBatDescription || "",
+  };
+  PropertiesService.getScriptProperties().setProperty(PROP_STEAL_REPORTED, JSON.stringify(payload));
+  log_("Stored reported steal for reversal checks", payload);
+}
+
+function getReportedSteal_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(PROP_STEAL_REPORTED);
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    log_("Failed to parse reported steal payload", String(e));
+    return null;
+  }
+}
+
+function clearReportedSteal_(reason) {
+  clearLatch_(PROP_STEAL_REPORTED, reason || "reported steal cleared");
+}
+
+/**
+ * Re-check a steal we already emailed about. MLB may overturn it after a replay review.
+ */
+function checkStealReversalToday_(todayChicago, homeGames) {
+  var reported = getReportedSteal_();
+  if (!reported || reported.dateChicago !== todayChicago) {
+    return;
+  }
+
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty(PROP_STEAL_CORRECTION_SENT) === todayChicago) {
+    log_("Steal correction already sent today — skip", { todayChicago: todayChicago });
+    return;
+  }
+
+  var status = getReportedStealStatus_(reported);
+  log_("Reported steal status check", {
+    player: reported.playerName,
+    gamePk: reported.gamePk,
+    stillValid: status.stillValid,
+    reason: status.reason || "(ok)",
+  });
+
+  if (status.stillValid) {
+    return;
+  }
+
+  sendStealCorrectionEmail_({
+    dateChicago: todayChicago,
+    reported: reported,
+    reversal: status,
+  });
+
+  setLatch_(PROP_STEAL_CORRECTION_SENT, todayChicago, "steal correction email sent");
+  clearLatch_(PROP_LAST_FIRED, "reported steal overturned — allow new steal alert today");
+  clearReportedSteal_("steal overturned");
+  clearLatch_(PROP_HOMESTAND_END_NOTIFIED, "false steal overturned — homestand end recap may apply");
+}
+
+/**
+ * @returns {{ stillValid: boolean, reason?: string, playDescription?: string }}
+ */
+function getReportedStealStatus_(reported) {
+  var box = boxscoreHomeSteals_(reported.gamePk);
+  var feed = fetchJson_(MLB_FEED_API + "/game/" + reported.gamePk + "/feed/live");
+  var feedSteals = getHomeStealsFromFeed_(reported.gamePk, box.opponent, "Final", box.opponentTeamId);
+
+  for (var i = 0; i < feedSteals.length; i++) {
+    var s = feedSteals[i];
+    if (s.playerId === reported.playerId && s.atBatIndex === reported.atBatIndex) {
+      return { stillValid: true, reason: "steal_still_in_feed" };
+    }
+  }
+
+  var cs = findHomeCaughtStealingOnPlay_(feed, reported.atBatIndex, reported.playerId);
+  if (cs) {
+    return {
+      stillValid: false,
+      reason: "caught_stealing",
+      playDescription: cs.playDescription || cs.description || "",
+    };
+  }
+
+  var playerStats = getPlayerStealStatsInBoxscore_(reported.gamePk, reported.playerId);
+  if (playerStats.cs > 0 && playerStats.sb === 0) {
+    var playDesc = getPlayDescriptionFromFeed_(feed, reported.atBatIndex);
+    return {
+      stillValid: false,
+      reason: "player_cs_in_boxscore",
+      playDescription: playDesc,
+    };
+  }
+
+  if (box.steals === 0 && !feedSteals.length) {
+    return {
+      stillValid: false,
+      reason: "no_home_steals_in_boxscore",
+      playDescription: getPlayDescriptionFromFeed_(feed, reported.atBatIndex),
+    };
+  }
+
+  if (playerStats.sb === 0 && reported.playerId) {
+    return {
+      stillValid: false,
+      reason: "player_sb_removed",
+      playDescription: getPlayDescriptionFromFeed_(feed, reported.atBatIndex),
+    };
+  }
+
+  return { stillValid: true, reason: "inconclusive" };
+}
+
+function getPlayDescriptionFromFeed_(feed, atBatIndex) {
+  var plays = (feed.liveData && feed.liveData.plays && feed.liveData.plays.allPlays) || [];
+  for (var i = 0; i < plays.length; i++) {
+    var about = plays[i].about || {};
+    if (about.atBatIndex === atBatIndex && plays[i].result && plays[i].result.description) {
+      return plays[i].result.description;
+    }
+  }
+  return "";
+}
+
+function getPlayerStealStatsInBoxscore_(gamePk, playerId) {
+  var box = fetchJson_(MLB_API + "/game/" + gamePk + "/boxscore");
+  var home = box.teams && box.teams.home;
+  if (!home || !home.players || !playerId) {
+    return { sb: 0, cs: 0 };
+  }
+  var players = home.players;
+  for (var key in players) {
+    if (!players.hasOwnProperty(key)) {
+      continue;
+    }
+    var p = players[key];
+    var person = p.person || {};
+    if (person.id !== playerId) {
+      continue;
+    }
+    var batting = (p.stats && p.stats.batting) || {};
+    return {
+      sb: parseInt(batting.stolenBases, 10) || 0,
+      cs: parseInt(batting.caughtStealing, 10) || 0,
+    };
+  }
+  return { sb: 0, cs: 0 };
+}
+
+function findHomeCaughtStealingOnPlay_(feed, atBatIndex, playerId) {
+  var plays = (feed.liveData && feed.liveData.plays && feed.liveData.plays.allPlays) || [];
+  var homeTeamId =
+    feed.gameData && feed.gameData.teams && feed.gameData.teams.home && feed.gameData.teams.home.id;
+
+  for (var i = 0; i < plays.length; i++) {
+    var play = plays[i];
+    var about = play.about || {};
+    if (about.atBatIndex !== atBatIndex) {
+      continue;
+    }
+
+    var playDescription = (play.result && play.result.description) || "";
+    var runners = play.runners || [];
+    for (var r = 0; r < runners.length; r++) {
+      var details = runners[r].details || {};
+      if (!isCaughtStealingEventType_(details.eventType)) {
+        continue;
+      }
+      var runner = details.runner || {};
+      if (playerId && runner.id !== playerId) {
+        continue;
+      }
+      if (homeTeamId && details.team && details.team.id && details.team.id !== homeTeamId) {
+        continue;
+      }
+      return {
+        description: details.description || details.event || "",
+        playDescription: playDescription,
+      };
+    }
+
+    if (isOverturnedCaughtStealingPlay_(play)) {
+      return {
+        description: playDescription,
+        playDescription: playDescription,
+      };
+    }
+  }
+  return null;
+}
+
+function isCaughtStealingEventType_(eventType) {
+  return eventType && eventType.indexOf("caught_stealing") === 0;
+}
+
+function isOverturnedCaughtStealingPlay_(play) {
+  var desc = (play.result && play.result.description) || "";
+  return desc.indexOf("overturned") >= 0 && /caught stealing/i.test(desc);
+}
+
+function hasActiveReviewOnPlay_(play) {
+  if (play.about && play.about.hasReview && !play.about.isComplete) {
+    return true;
+  }
+  var events = play.playEvents || [];
+  for (var i = 0; i < events.length; i++) {
+    var rev = events[i].reviewDetails;
+    if (rev && rev.inProgress) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // --- Play-by-play ----------------------------------------------------------
 
 /** e.g. "Miguel Vargas stole 2B" */
@@ -947,6 +1313,9 @@ function getHomeStealsFromFeed_(gamePk, opponent, status, opponentTeamId) {
 
   for (var i = 0; i < plays.length; i++) {
     var play = plays[i];
+    if (hasActiveReviewOnPlay_(play) || isOverturnedCaughtStealingPlay_(play)) {
+      continue;
+    }
     var stealEvents = collectStealEventsFromPlay_(play);
     for (var e = 0; e < stealEvents.length; e++) {
       var ev = stealEvents[e];
@@ -1471,6 +1840,14 @@ function resetNotifyLatch() {
   clearLatch_(PROP_LAST_FIRED, "manual reset");
 }
 
+function resetStealReportedLatch() {
+  clearReportedSteal_("manual reset");
+}
+
+function resetStealCorrectionLatch() {
+  clearLatch_(PROP_STEAL_CORRECTION_SENT, "manual reset");
+}
+
 function resetHomestandPreviewLatch() {
   clearLatch_(PROP_HOMESTAND_PREVIEW, "manual reset");
 }
@@ -1582,6 +1959,43 @@ function testHomestandEndNoSteal() {
     dateChicago: todayChicago,
     homestand: homestand,
     nextHomestand: nextHomestand,
+  });
+}
+
+/**
+ * Steal correction test — uses game 824583 (Meidroth CS overturn) by default.
+ */
+function testStealCorrectionEmail(gamePk) {
+  var todayChicago = chicagoDateString_(new Date());
+  var pk = gamePk || 824583;
+  var box = boxscoreHomeSteals_(pk);
+  var reported = {
+    dateChicago: todayChicago,
+    gamePk: pk,
+    playerId: 805367,
+    playerName: "Chase Meidroth",
+    inningLabel: "Bot 2",
+    baseLabel: "2B",
+    opponent: box.opponent,
+    opponentTeamId: box.opponentTeamId,
+    atBatIndex: 13,
+    playEventIndex: 0,
+    description: "Chase Meidroth steals (1) 2nd base.",
+    atBatDescription: "",
+  };
+  var status = getReportedStealStatus_(reported);
+  log_("[TEST] testStealCorrectionEmail", { gamePk: pk, status: status });
+
+  sendStealCorrectionEmail_({
+    dateChicago: todayChicago,
+    reported: reported,
+    reversal: status.stillValid
+      ? {
+          reason: "test",
+          playDescription:
+            "Guardians challenged (tag play), call on the field was overturned: Braden Montgomery called out on strikes and Chase Meidroth caught stealing 2nd, catcher Patrick Bailey to shortstop Brayan Rocchio to catcher Patrick Bailey.",
+        }
+      : status,
   });
 }
 
