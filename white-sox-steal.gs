@@ -1302,7 +1302,8 @@ function getStealMlbDescriptions_(steal) {
 
 /**
  * Stolen bases by White Sox (home team) from live feed.
- * Steals may be a top-level play or a playEvent inside an at-bat (common in recent feeds).
+ * Steals may be a top-level play, a playEvent inside an at-bat, or only a runner
+ * movement when the at-bat result is something else (steal during a strikeout).
  * @returns {Array<{gamePk:number,playerId:number,playerName:string,description:string,inningLabel:string,baseLabel:string,opponent:string,opponentTeamId:number,status:string,atBatIndex:number,playEventIndex:number,sortKey:number}>}
  */
 function getHomeStealsFromFeed_(gamePk, opponent, status, opponentTeamId) {
@@ -1330,8 +1331,14 @@ function getHomeStealsFromFeed_(gamePk, opponent, status, opponentTeamId) {
       var atBatIndex = about.atBatIndex != null ? about.atBatIndex : i;
       var playEventIndex = ev.playEventIndex != null ? ev.playEventIndex : 0;
 
-      var atBatDescription =
-        ev.source === "playEvent" && play.result && play.result.description ? play.result.description : "";
+      var atBatDescription = "";
+      if (
+        (ev.source === "playEvent" || ev.source === "runner") &&
+        play.result &&
+        play.result.description
+      ) {
+        atBatDescription = play.result.description;
+      }
 
       out.push({
         gamePk: gamePk,
@@ -1354,9 +1361,14 @@ function getHomeStealsFromFeed_(gamePk, opponent, status, opponentTeamId) {
   return out;
 }
 
-/** Standalone steal play or embedded playEvent (e.g. steal during a single). */
+/**
+ * Standalone steal play, embedded playEvent, or runner movement on another result
+ * (e.g. "strikes out swinging. Miguel Vargas steals (22) 2nd base.").
+ */
 function collectStealEventsFromPlay_(play) {
   var events = [];
+  var coveredRunnerIds = {};
+
   if (play.result && isStolenBaseEventType_(play.result.eventType)) {
     events.push({
       source: "result",
@@ -1365,13 +1377,21 @@ function collectStealEventsFromPlay_(play) {
       description: play.result.description || "",
       playEventIndex: 0,
     });
+    var primary = extractStealRunner_(play);
+    if (primary && primary.id) {
+      coveredRunnerIds[primary.id] = true;
+    }
   }
+
   var playEvents = play.playEvents || [];
   for (var p = 0; p < playEvents.length; p++) {
     var pe = playEvents[p];
     var det = pe.details || {};
     if (!isStolenBaseEventType_(det.eventType)) {
       continue;
+    }
+    if (pe.player && pe.player.id) {
+      coveredRunnerIds[pe.player.id] = true;
     }
     events.push({
       source: "playEvent",
@@ -1382,7 +1402,76 @@ function collectStealEventsFromPlay_(play) {
       playEventIndex: pe.index != null ? pe.index : p,
     });
   }
+
+  var runners = play.runners || [];
+  for (var r = 0; r < runners.length; r++) {
+    var details = runners[r].details || {};
+    if (!isStolenBaseEventType_(details.eventType)) {
+      continue;
+    }
+    var runner = details.runner || {};
+    if (runner.id && coveredRunnerIds[runner.id]) {
+      continue;
+    }
+    if (runner.id) {
+      coveredRunnerIds[runner.id] = true;
+    }
+    events.push({
+      source: "runner",
+      runner: runner,
+      eventType: details.eventType,
+      event: details.event,
+      description: stealDescriptionFromRunner_(play, runner, details),
+      playEventIndex: details.playIndex != null ? details.playIndex : r,
+    });
+  }
+
   return events;
+}
+
+/** Official steal sentence when MLB only attaches stolen_base_* to a runner. */
+function stealDescriptionFromRunner_(play, runner, details) {
+  if (details && details.description) {
+    return details.description;
+  }
+  var full = (play.result && play.result.description) || "";
+  var sentence = extractStealSentence_(full, runner && runner.fullName);
+  if (sentence) {
+    return sentence;
+  }
+  var name = (runner && runner.fullName) || "Runner";
+  var base = parseStolenBaseLabel_(details && details.eventType, details && details.event);
+  return name + " steals " + base + ".";
+}
+
+function extractStealSentence_(description, runnerName) {
+  if (!description) {
+    return "";
+  }
+  var parts = String(description).split(". ");
+  var stealParts = [];
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i].trim();
+    if (!part || !/steal/i.test(part)) {
+      continue;
+    }
+    if (part.charAt(part.length - 1) !== ".") {
+      part += ".";
+    }
+    stealParts.push(part);
+  }
+  if (!stealParts.length) {
+    return "";
+  }
+  if (runnerName) {
+    var last = String(runnerName).split(" ").pop();
+    for (var j = 0; j < stealParts.length; j++) {
+      if (stealParts[j].indexOf(runnerName) >= 0 || (last && stealParts[j].indexOf(last) >= 0)) {
+        return stealParts[j];
+      }
+    }
+  }
+  return stealParts[0];
 }
 
 /** MLB API uses stolen_base_2b / stolen_base_3b / stolen_base_home, never bare "stolen_base". */
@@ -1414,23 +1503,43 @@ function isHomeTeamSteal_(play, stealEvent, feed) {
         continue;
       }
     }
+    if (stealEvent.source === "runner" && stealEvent.runner && stealEvent.runner.id) {
+      if (details.runner.id !== stealEvent.runner.id) {
+        continue;
+      }
+    }
     var teamId = details.team && details.team.id;
     if (teamId === homeTeamId) {
       return true;
     }
   }
 
-  if (stealEvent.source === "playEvent" && stealEvent.playEvent && stealEvent.playEvent.player) {
-    var playerId = stealEvent.playEvent.player.id;
-    if (isPlayerOnTeamInFeed_(playerId, homeTeamId, feed)) {
-      return true;
-    }
+  var stealPlayerId = stealPlayerIdFromEvent_(stealEvent);
+  if (stealPlayerId && isPlayerOnTeamInFeed_(stealPlayerId, homeTeamId, feed)) {
+    return true;
   }
 
   return play.about && play.about.halfInning === "bottom";
 }
 
+function stealPlayerIdFromEvent_(stealEvent) {
+  if (stealEvent.source === "playEvent" && stealEvent.playEvent && stealEvent.playEvent.player) {
+    return stealEvent.playEvent.player.id;
+  }
+  if (stealEvent.source === "runner" && stealEvent.runner) {
+    return stealEvent.runner.id;
+  }
+  return 0;
+}
+
 function resolveStealRunner_(play, stealEvent, feed) {
+  if (stealEvent.source === "runner" && stealEvent.runner && stealEvent.runner.id) {
+    var runner = stealEvent.runner;
+    return {
+      id: runner.id,
+      name: runner.fullName || lookupPlayerNameInFeed_(runner.id, feed) || "Unknown",
+    };
+  }
   if (stealEvent.source === "playEvent" && stealEvent.playEvent && stealEvent.playEvent.player) {
     var pePlayer = stealEvent.playEvent.player;
     var id = pePlayer.id;
